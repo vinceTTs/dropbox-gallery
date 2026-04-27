@@ -28,4 +28,4 @@ sudo apt install -y ansible
 # Run the Ansible playbook
 echo ""
 echo "Step 4/4: Running Ansible playbook..."
-ansible-playbook -i dropbox-gallery/localhost.ini dropbox-gallery/ansible.yml
+ansible-playbook dropbox-gallery/ansible.yml

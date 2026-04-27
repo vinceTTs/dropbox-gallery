@@ -28,4 +28,4 @@ sudo apt install -y ansible
 # Run the Ansible playbook
 echo ""
 echo "Step 4/4: Running Ansible playbook..."
-ansible-playbook -i ansible/localhost.ini ansible/ansible.yml
+ansible-playbook -i localhost.ini ansible.yml

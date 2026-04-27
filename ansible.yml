@@ -1,0 +1,613 @@
+---
+- name: Configure Dropbox access on Raspberry Pi
+  hosts: local
+  become: true
+
+  vars:
+    dropbox_remote_name: dropbox
+    dropbox_user: "{{ ansible_user | default('raspi') }}"
+    dropbox_group: "{{ dropbox_user }}"
+    dropbox_home: "/home/{{ dropbox_user }}"
+    dropbox_config_dir: "{{ dropbox_home }}/.config/rclone"
+    dropbox_config_file: "{{ dropbox_config_dir }}/rclone.conf"
+    dropbox_client_id_file: "{{ playbook_dir }}/dropbox_client_id.txt"
+    dropbox_client_secret_file: "{{ playbook_dir }}/dropbox_client_secret.txt"
+    dropbox_client_id_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_id_file, errors='ignore') | trim }}"
+    dropbox_client_secret_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_secret_file, errors='ignore') | trim }}"
+    dropbox_client_id_effective: "{{ (dropbox_client_id | default('', true)) or dropbox_client_id_from_file }}"
+    dropbox_client_secret_effective: "{{ (dropbox_client_secret | default('', true)) or dropbox_client_secret_from_file }}"
+    dropbox_token_file: "{{ playbook_dir }}/dropbox_token.json"
+    dropbox_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_token_file, errors='ignore') | trim }}"
+    dropbox_token_effective: "{{ (dropbox_token | default('', true)) or dropbox_token_from_file }}"
+    dropbox_access_token_file: "{{ playbook_dir }}/dropbox_access.token"
+    dropbox_access_token_from_env: "{{ lookup('ansible.builtin.env', 'DROPBOX_ACCESS_TOKEN') | trim }}"
+    dropbox_access_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_access_token_file, errors='ignore') | trim }}"
+    dropbox_access_token_effective: "{{ (dropbox_access_token | default('', true)) or dropbox_access_token_from_env or dropbox_access_token_from_file }}"
+    dropbox_auth_effective: "{{ dropbox_token_effective or dropbox_access_token_effective }}"
+    dropbox_source_path: ""
+    dropbox_download_dir: /opt/dropbox-download
+    dropbox_slideshow_dir: /opt/digital-frame
+    dropbox_slideshow_media_dir: "{{ dropbox_slideshow_dir }}/media"
+    dropbox_playlist_file: "{{ dropbox_slideshow_dir }}/playlist.m3u"
+    dropbox_copy_enable: true
+    dropbox_copy_schedule: "*-*-* 03:00:00"
+    dropbox_filter_file: "{{ dropbox_config_dir }}/dropbox-download.filter"
+    dropbox_copy_log_file: "{{ dropbox_config_dir }}/dropbox-rclone-copy.log"
+    dropbox_recent_days: 7
+    dropbox_min_files: 10
+    dropbox_image_display_duration: 20
+    dropbox_resize_images: true
+    dropbox_resize_max_dimension: 1920
+    dropbox_player_script: "{{ dropbox_home }}/.local/bin/start-digital-frame.sh"
+    dropbox_autostart_dir: "{{ dropbox_home }}/.config/autostart"
+    dropbox_autostart_file: "{{ dropbox_autostart_dir }}/digital-frame.desktop"
+    dropbox_enable_desktop_autostart: true
+    dropbox_filter_patterns:
+      - "*.jpg"
+      - "*.jpeg"
+      - "*.JPG"
+      - "*.JPEG"
+      - "*.heic"
+      - "*.HEIC"
+      - "*.mp4"
+      - "*.MP4"
+      - "*.mov"
+      - "*.MOV"
+      - "*.m4v"
+      - "*.M4V"
+    dropbox_mount_point: /mnt/dropbox
+    dropbox_enable_mount: false
+    dropbox_mount_options:
+      - --allow-other
+      - --dir-cache-time=72h
+      - --vfs-cache-mode=full
+      - --vfs-cache-max-age=24h
+  pre_tasks:
+    - name: Ensure Dropbox access token is provided
+      ansible.builtin.assert:
+        that:
+          - dropbox_auth_effective | length > 0
+        fail_msg: >-
+          Keine Dropbox-Anmeldedaten gefunden. Übergib entweder -e "dropbox_token=...",
+          -e "dropbox_access_token=...", setze die Umgebungsvariable DROPBOX_ACCESS_TOKEN,
+          lege die Datei {{ dropbox_token_file }} mit einem vollständigen rclone-Token-JSON an
+          oder lege die Datei {{ dropbox_access_token_file }} mit einem reinen Access-Token an.
+        success_msg: Dropbox-Anmeldedaten gefunden.
+      no_log: true
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install rclone and FUSE packages
+      ansible.builtin.apt:
+        name:
+          - rclone
+          - fuse3
+          - mpv
+          - libheif-examples
+          - python3-pil
+          - x11-xserver-utils
+        state: present
+
+    - name: Ensure slideshow user is in video related groups
+      ansible.builtin.user:
+        name: "{{ dropbox_user }}"
+        groups:
+          - video
+          - render
+          - input
+        append: true
+
+    - name: Ensure rclone config directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_config_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0700'
+
+    - name: Write rclone config for Dropbox
+      ansible.builtin.copy:
+        dest: "{{ dropbox_config_file }}"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0600'
+        content: |
+          [{{ dropbox_remote_name }}]
+          type = dropbox
+          {% if dropbox_client_id_effective | length > 0 %}client_id = {{ dropbox_client_id_effective }}
+          {% endif %}{% if dropbox_client_secret_effective | length > 0 %}client_secret = {{ dropbox_client_secret_effective }}
+          {% endif %}token = {{ dropbox_auth_effective }}
+      no_log: true
+
+    - name: Ensure Dropbox mount directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_mount_point }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure Dropbox download directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_download_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure slideshow directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_slideshow_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure slideshow media directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_slideshow_media_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure local user bin directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_home }}/.local/bin"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure desktop autostart directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_autostart_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+      when: dropbox_enable_desktop_autostart | bool
+
+    - name: Write Dropbox download filter file
+      ansible.builtin.copy:
+        dest: "{{ dropbox_filter_file }}"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0600'
+        content: |
+          {% for pattern in dropbox_filter_patterns %}
+          + {{ pattern }}
+          {% endfor %}
+          - **
+      when: dropbox_filter_patterns | length > 0
+
+    - name: Create Dropbox media refresh script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/dropbox-refresh-media.py
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+          import json
+          import os
+          import subprocess
+          import sys
+          import tempfile
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+
+          REMOTE = {{ dropbox_remote_name | to_json }}
+          SOURCE_PATH = {{ dropbox_source_path | to_json }}
+          CONFIG_FILE = {{ dropbox_config_file | to_json }}
+          FILTER_FILE = {{ dropbox_filter_file | to_json }}
+          DOWNLOAD_DIR = Path({{ dropbox_download_dir | to_json }})
+          SLIDESHOW_MEDIA_DIR = Path({{ dropbox_slideshow_media_dir | to_json }})
+          PLAYLIST_FILE = Path({{ dropbox_playlist_file | to_json }})
+          RECENT_DAYS = {{ dropbox_recent_days }}
+          MIN_FILES = {{ dropbox_min_files }}
+          RESIZE_IMAGES = {{ dropbox_resize_images | ternary('True', 'False') }}
+          RESIZE_MAX_DIMENSION = {{ dropbox_resize_max_dimension }}
+          IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+          HEIC_SUFFIXES = {".heic", ".heif"}
+
+          try:
+              from PIL import Image, ImageOps
+          except ImportError:
+              Image = None
+              ImageOps = None
+
+          def remote_spec() -> str:
+              return f"{REMOTE}:{SOURCE_PATH}" if SOURCE_PATH else f"{REMOTE}:"
+
+          def parse_modtime(value: str) -> datetime:
+              if not value:
+                  return datetime.fromtimestamp(0, tz=timezone.utc)
+              return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+          def run_json_command() -> list[dict]:
+              cmd = [
+                  "rclone",
+                  "lsjson",
+                  remote_spec(),
+                  "--recursive",
+                  "--files-only",
+                  "--config",
+                  CONFIG_FILE,
+              ]
+              if FILTER_FILE:
+                  cmd.extend(["--filter-from", FILTER_FILE])
+              result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+              return json.loads(result.stdout or "[]")
+
+          def select_files(items: list[dict]) -> list[str]:
+              cutoff = datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)
+              sorted_items = sorted(
+                  (item for item in items if not item.get("IsDir", False)),
+                  key=lambda item: parse_modtime(item.get("ModTime", "")),
+                  reverse=True,
+              )
+
+              selected: list[str] = []
+              selected_set: set[str] = set()
+
+              for item in sorted_items:
+                  path = item.get("Path")
+                  if not path:
+                      continue
+                  if parse_modtime(item.get("ModTime", "")) >= cutoff and path not in selected_set:
+                      selected.append(path)
+                      selected_set.add(path)
+
+              if len(selected) < MIN_FILES:
+                  for item in sorted_items:
+                      path = item.get("Path")
+                      if not path or path in selected_set:
+                          continue
+                      selected.append(path)
+                      selected_set.add(path)
+                      if len(selected) >= MIN_FILES:
+                          break
+
+              return selected
+
+          def copy_selected_files(selected: list[str]) -> None:
+              if not selected:
+                  PLAYLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+                  PLAYLIST_FILE.write_text("", encoding="utf-8")
+                  print("Keine passenden Medien gefunden.")
+                  return
+
+              with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as handle:
+                  handle.write("\n".join(selected))
+                  handle.write("\n")
+                  files_from_path = handle.name
+
+              try:
+                  cmd = [
+                      "rclone",
+                      "copy",
+                      remote_spec(),
+                      str(DOWNLOAD_DIR),
+                      "--config",
+                      CONFIG_FILE,
+                      "--files-from",
+                      files_from_path,
+                      "--no-traverse",
+                      "--create-empty-src-dirs",
+                  ]
+                  subprocess.run(cmd, check=True)
+              finally:
+                  os.unlink(files_from_path)
+
+          def cleanup_local_files(selected: list[str]) -> None:
+              keep = {Path(path).as_posix() for path in selected}
+              if DOWNLOAD_DIR.exists():
+                  for file_path in sorted(DOWNLOAD_DIR.rglob("*"), reverse=True):
+                      if file_path.is_file():
+                          rel_path = file_path.relative_to(DOWNLOAD_DIR).as_posix()
+                          if rel_path not in keep:
+                              file_path.unlink()
+                      elif file_path.is_dir():
+                          try:
+                              file_path.rmdir()
+                          except OSError:
+                              pass
+
+          def resize_image(source_path: Path, target_path: Path) -> None:
+              with Image.open(source_path) as image:
+                  image = ImageOps.exif_transpose(image)
+                  image.thumbnail((RESIZE_MAX_DIMENSION, RESIZE_MAX_DIMENSION))
+                  save_kwargs = {"optimize": True}
+                  if target_path.suffix.lower() in {".jpg", ".jpeg"}:
+                      if image.mode not in ("RGB", "L"):
+                          image = image.convert("RGB")
+                      save_kwargs["quality"] = 88
+                  image.save(target_path, **save_kwargs)
+
+          def convert_heic(source_path: Path, target_path: Path) -> Path:
+              converted_target = target_path.with_suffix(".jpg")
+              converted_target.parent.mkdir(parents=True, exist_ok=True)
+              subprocess.run(
+                  ["heif-convert", str(source_path), str(converted_target)],
+                  check=True,
+                  capture_output=True,
+                  text=True,
+              )
+              return converted_target
+
+          def create_display_media(selected: list[str]) -> dict[str, str]:
+              generated: dict[str, str] = {}
+              SLIDESHOW_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+              for rel_path in selected:
+                  source_path = DOWNLOAD_DIR / Path(rel_path)
+                  target_path = SLIDESHOW_MEDIA_DIR / Path(rel_path)
+                  target_path.parent.mkdir(parents=True, exist_ok=True)
+
+                  suffix = source_path.suffix.lower()
+                  actual_target = target_path
+
+                  if suffix in HEIC_SUFFIXES:
+                      actual_target = convert_heic(source_path, target_path)
+                      if RESIZE_IMAGES and Image is not None and ImageOps is not None:
+                          resize_image(actual_target, actual_target)
+                  elif RESIZE_IMAGES and suffix in IMAGE_SUFFIXES and Image is not None and ImageOps is not None:
+                      resize_image(source_path, target_path)
+                  else:
+                      if actual_target.exists() or actual_target.is_symlink():
+                          actual_target.unlink()
+                      actual_target.symlink_to(source_path)
+
+                  generated[rel_path] = actual_target.relative_to(SLIDESHOW_MEDIA_DIR).as_posix()
+
+              keep_outputs = set(generated.values())
+              if SLIDESHOW_MEDIA_DIR.exists():
+                  for file_path in sorted(SLIDESHOW_MEDIA_DIR.rglob("*"), reverse=True):
+                      rel_path = file_path.relative_to(SLIDESHOW_MEDIA_DIR).as_posix()
+                      if file_path.is_file() or file_path.is_symlink():
+                          if rel_path not in keep_outputs:
+                              file_path.unlink()
+                      elif file_path.is_dir():
+                          try:
+                              file_path.rmdir()
+                          except OSError:
+                              pass
+
+              return generated
+
+          def write_playlist(selected: list[str], generated: dict[str, str]) -> None:
+              PLAYLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+              with PLAYLIST_FILE.open("w", encoding="utf-8") as handle:
+                  for rel_path in selected:
+                      local_rel_path = generated.get(rel_path)
+                      if not local_rel_path:
+                          continue
+                      local_path = SLIDESHOW_MEDIA_DIR / Path(local_rel_path)
+                      if local_path.exists():
+                          handle.write(f"{local_path}\n")
+
+          def main() -> int:
+              DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+              SLIDESHOW_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+              items = run_json_command()
+              selected = select_files(items)
+              print(f"Ausgewählte Medien: {len(selected)}")
+              copy_selected_files(selected)
+              cleanup_local_files(selected)
+              generated = create_display_media(selected)
+              write_playlist(selected, generated)
+              print(f"Playlist geschrieben: {PLAYLIST_FILE}")
+              return 0
+
+          if __name__ == "__main__":
+              sys.exit(main())
+
+    - name: Create Dropbox reconnect helper script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/dropbox-reconnect.sh
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          exec rclone config reconnect {{ dropbox_remote_name }}: --config {{ dropbox_config_file }}
+
+    - name: Create Dropbox authorize helper script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/dropbox-authorize.sh
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          CLIENT_ID="{{ dropbox_client_id_effective }}"
+          CLIENT_SECRET="{{ dropbox_client_secret_effective }}"
+
+          if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
+            echo "Fehlende Dropbox App-Daten. Lege {{ dropbox_client_id_file }} und {{ dropbox_client_secret_file }} an oder übergib dropbox_client_id/dropbox_client_secret." >&2
+            exit 1
+          fi
+
+          exec rclone authorize dropbox "$CLIENT_ID" "$CLIENT_SECRET"
+
+    - name: Create Dropbox copy script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/dropbox-copy.sh
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          mkdir -p "$(dirname "{{ dropbox_copy_log_file }}")"
+
+          {
+            echo "[$(date --iso-8601=seconds)] Starte Dropbox-Medienaktualisierung"
+            /usr/bin/python3 /usr/local/bin/dropbox-refresh-media.py
+            echo "[$(date --iso-8601=seconds)] Dropbox-Medienaktualisierung abgeschlossen"
+          } >> "{{ dropbox_copy_log_file }}" 2>&1
+      when: dropbox_copy_enable | bool
+
+    - name: Create digital frame player start script
+      ansible.builtin.copy:
+        dest: "{{ dropbox_player_script }}"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          export DISPLAY=:0
+          export XAUTHORITY="{{ dropbox_home }}/.Xauthority"
+
+          if command -v xset >/dev/null 2>&1; then
+            xset s off -dpms s noblank >/dev/null 2>&1 || true
+          fi
+
+          until [ -f "{{ dropbox_playlist_file }}" ]; do
+            sleep 10
+          done
+
+          exec /usr/bin/mpv \
+            --fs \
+            --shuffle \
+            --loop-playlist=inf \
+            --no-terminal \
+            --image-display-duration={{ dropbox_image_display_duration }} \
+            --playlist="{{ dropbox_playlist_file }}"
+      when: dropbox_enable_desktop_autostart | bool
+
+    - name: Create desktop autostart entry for digital frame
+      ansible.builtin.copy:
+        dest: "{{ dropbox_autostart_file }}"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0644'
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name=Digital Frame
+          Exec={{ dropbox_player_script }}
+          X-GNOME-Autostart-enabled=true
+      when: dropbox_enable_desktop_autostart | bool
+
+    - name: Test Dropbox connection
+      ansible.builtin.command:
+        argv:
+          - rclone
+          - lsd
+          - "{{ dropbox_remote_name }}:"
+          - --config
+          - "{{ dropbox_config_file }}"
+      become_user: "{{ dropbox_user }}"
+      changed_when: false
+      register: dropbox_test
+
+    - name: Create systemd service for Dropbox copy
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dropbox-rclone-copy.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Download selected files from Dropbox via rclone copy
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          User={{ dropbox_user }}
+          Group={{ dropbox_group }}
+          ExecStart=/usr/local/bin/dropbox-copy.sh
+      when: dropbox_copy_enable | bool
+
+    - name: Create systemd timer for Dropbox copy
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dropbox-rclone-copy.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Run Dropbox download once per day
+
+          [Timer]
+          OnCalendar={{ dropbox_copy_schedule }}
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      when: dropbox_copy_enable | bool
+
+    - name: Enable and start Dropbox copy timer
+      ansible.builtin.systemd:
+        name: dropbox-rclone-copy.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: dropbox_copy_enable | bool
+
+    - name: Create systemd service for Dropbox mount
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/dropbox-rclone.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Dropbox mount via rclone
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=simple
+          User={{ dropbox_user }}
+          Group={{ dropbox_group }}
+          ExecStart=/usr/bin/rclone mount {{ dropbox_remote_name }}: {{ dropbox_mount_point }} --config {{ dropbox_config_file }} {{ dropbox_mount_options | join(' ') }}
+          ExecStop=/bin/fusermount3 -uz {{ dropbox_mount_point }}
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      when: dropbox_enable_mount | bool
+
+    - name: Enable and start Dropbox mount service
+      ansible.builtin.systemd:
+        name: dropbox-rclone.service
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: dropbox_enable_mount | bool
+
+    - name: Print Dropbox status
+      ansible.builtin.debug:
+        msg:
+          - "Dropbox wurde mit rclone konfiguriert."
+          - "Remote: {{ dropbox_remote_name }}:"
+          - "Config: {{ dropbox_config_file }}"
+          - "Download aktiv: {{ dropbox_copy_enable }}"
+          - "Dropbox-Quelle: {{ dropbox_remote_name }}:{{ dropbox_source_path }}"
+          - "Download-Ziel: {{ dropbox_download_dir }}"
+          - "Anzeige-Medien: {{ dropbox_slideshow_media_dir }}"
+          - "Slideshow-Playlist: {{ dropbox_playlist_file }}"
+          - "Letzte Tage bevorzugt: {{ dropbox_recent_days }}"
+          - "Mindestens Dateien: {{ dropbox_min_files }}"
+          - "Bilder lokal verkleinern: {{ dropbox_resize_images }} (max {{ dropbox_resize_max_dimension }} px)"
+          - "Zeitplan: {{ dropbox_copy_schedule }}"
+          - "Manueller Einmal-Start: sudo systemctl start dropbox-rclone-copy.service"
+          - "Token erneut verbinden: sudo /usr/local/bin/dropbox-reconnect.sh"
+          - "Neuen Token im Browser erzeugen: /usr/local/bin/dropbox-authorize.sh"
+          - "Player-Startscript: {{ dropbox_player_script }}"
+          - "Desktop-Autostart: {{ dropbox_autostart_file if dropbox_enable_desktop_autostart else 'deaktiviert' }}"
+          - "Player-Empfehlung manuell lokal am Pi: {{ dropbox_player_script }}"
+          - "Log-Datei: {{ dropbox_copy_log_file }}"
+          - "Filter: {{ (dropbox_filter_patterns | join(', ')) if (dropbox_filter_patterns | length > 0) else 'kein Filter' }}"
+          - "Mount aktiv: {{ dropbox_enable_mount }}"
+          - "Mount-Pfad: {{ dropbox_mount_point }}"

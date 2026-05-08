@@ -11,20 +11,16 @@
     dropbox_home: "/home/{{ dropbox_user }}"
     dropbox_config_dir: "{{ dropbox_home }}/.config/rclone"
     dropbox_config_file: "{{ dropbox_config_dir }}/rclone.conf"
-    dropbox_client_id_file: "{{ playbook_dir }}/credentials/dropbox_key.txt"
-    dropbox_client_secret_file: "{{ playbook_dir }}/credentials/dropbox_secret.txt"
+    dropbox_client_id_file: "{{ playbook_dir }}/../credentials/dropbox_key.txt"
+    dropbox_client_secret_file: "{{ playbook_dir }}/../credentials/dropbox_secret.txt"
     dropbox_client_id_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_id_file, errors='ignore') | trim }}"
     dropbox_client_secret_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_secret_file, errors='ignore') | trim }}"
     dropbox_client_id_effective: "{{ dropbox_client_id_from_file }}"
     dropbox_client_secret_effective: "{{ dropbox_client_secret_from_file }}"
-    dropbox_token_file: "{{ playbook_dir }}/dropbox_token.json"
-    dropbox_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_token_file, errors='ignore') | trim }}"
-    dropbox_token_effective: "{{ (dropbox_token | default('', true)) or dropbox_token_from_file }}"
-    dropbox_access_token_file: "{{ playbook_dir }}/dropbox_access.token"
-    dropbox_access_token_from_env: "{{ lookup('ansible.builtin.env', 'DROPBOX_ACCESS_TOKEN') | trim }}"
+    dropbox_access_token_file: "{{ playbook_dir }}/../credentials/dropbox_access_token.txt"
     dropbox_access_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_access_token_file, errors='ignore') | trim }}"
-    dropbox_access_token_effective: "{{ (dropbox_access_token | default('', true)) or dropbox_access_token_from_env or dropbox_access_token_from_file }}"
-    dropbox_auth_effective: "{{ dropbox_token_effective or dropbox_access_token_effective }}"
+    dropbox_access_token_effective: "{{ dropbox_access_token_from_file }}"
+    dropbox_auth_effective: "{{ dropbox_access_token_effective }}"
     dropbox_source_path: ""
     dropbox_download_dir: /opt/dropbox-download
     dropbox_slideshow_dir: /opt/digital-frame
@@ -83,15 +79,22 @@
           und {{ dropbox_client_secret_file }} (client_secret) als Textdateien an.
       no_log: true
 
-    - name: Ensure Dropbox access token is provided
+    - name: Reject direct variable input for Dropbox token
+      ansible.builtin.assert:
+        that:
+          - dropbox_token is not defined
+          - dropbox_access_token is not defined
+        fail_msg: >-
+          Dropbox access token ist nur als Datei erlaubt.
+          Verwende ausschließlich {{ dropbox_access_token_file }}.
+
+    - name: Ensure Dropbox access token file is present
       ansible.builtin.assert:
         that:
           - dropbox_auth_effective | length > 0
         fail_msg: >-
-          Keine Dropbox-Anmeldedaten gefunden. Übergib entweder -e "dropbox_token=...",
-          -e "dropbox_access_token=...", setze die Umgebungsvariable DROPBOX_ACCESS_TOKEN,
-          lege die Datei {{ dropbox_token_file }} mit einem vollständigen rclone-Token-JSON an
-          oder lege die Datei {{ dropbox_access_token_file }} mit einem reinen Access-Token an.
+          Keine Dropbox-Anmeldedaten gefunden. Lege {{ dropbox_access_token_file }}
+          als Textdatei mit einem gültigen Access-Token an.
         success_msg: Dropbox-Anmeldedaten gefunden.
       no_log: true
 
@@ -622,7 +625,7 @@
           - "Bilder lokal verkleinern: {{ dropbox_resize_images }} (max {{ dropbox_resize_max_dimension }} px)"
           - "Zeitplan: {{ dropbox_copy_schedule }}"
           - "Manueller Einmal-Start: sudo systemctl start dropbox-rclone-copy.service"
-          - "Token erneut verbinden: sudo /usr/local/bin/dropbox-reconnect.sh"
+          - "Access-Token aktualisieren: Datei {{ dropbox_access_token_file }} überschreiben und Playbook neu ausführen"
           - "Neuen Token im Browser erzeugen: /usr/local/bin/dropbox-authorize.sh"
           - "Player-Startscript: {{ dropbox_player_script }}"
           - "Desktop-Autostart: {{ dropbox_autostart_file if dropbox_enable_desktop_autostart else 'deaktiviert' }}"

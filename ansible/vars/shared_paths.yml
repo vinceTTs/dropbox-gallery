@@ -1,0 +1,6 @@
+---
+# Shared folder configuration used by both dropbox.yml and gallery.yml.
+dropbox_download_dir: /opt/dropbox-download
+dropbox_slideshow_dir: /opt/digital-frame
+dropbox_slideshow_media_dir: "{{ dropbox_slideshow_dir }}/media"
+dropbox_playlist_file: "{{ dropbox_slideshow_dir }}/playlist.m3u"

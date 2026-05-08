@@ -34,4 +34,27 @@ Update token:
 1. Overwrite `credentials/dropbox_access_token.txt` with the new token.
 2. Run `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K` again.
 
+## dropbox and gallery split
+The setup is split into two playbooks:
+
+* `ansible/dropbox.yml` for Dropbox/rclone download and sync service
+* `ansible/gallery.yml` for gallery player/autostart setup
+
+Run both (recommended order):
+
+1. `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K`
+2. `ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K`
+
+## shared folders for both playbooks
+Shared folder variables are defined in `ansible/vars/shared_paths.yml` and loaded by both playbooks.
+
+Current shared paths:
+
+* `dropbox_download_dir` (`/opt/dropbox-download`)
+* `dropbox_slideshow_dir` (`/opt/digital-frame`)
+* `dropbox_slideshow_media_dir`
+* `dropbox_playlist_file`
+
+If you change folders, update only `ansible/vars/shared_paths.yml`.
+
 

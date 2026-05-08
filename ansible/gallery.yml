@@ -1,0 +1,117 @@
+---
+- name: Configure gallery playback on Raspberry Pi
+  hosts: localhost
+  connection: raspi
+  become: true
+
+  vars:
+    dropbox_user: "{{ ansible_user | default('raspi') }}"
+    dropbox_group: "{{ dropbox_user }}"
+    dropbox_home: "/home/{{ dropbox_user }}"
+    dropbox_image_display_duration: 20
+    dropbox_player_script: "{{ dropbox_home }}/.local/bin/start-digital-frame.sh"
+    dropbox_autostart_dir: "{{ dropbox_home }}/.config/autostart"
+    dropbox_autostart_file: "{{ dropbox_autostart_dir }}/digital-frame.desktop"
+    dropbox_enable_desktop_autostart: true
+
+  pre_tasks:
+    - name: Load shared path variables
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/vars/shared_paths.yml"
+
+  tasks:
+    - name: Ensure slideshow user is in video related groups
+      ansible.builtin.user:
+        name: "{{ dropbox_user }}"
+        groups:
+          - video
+          - render
+          - input
+        append: true
+
+    - name: Ensure slideshow directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_slideshow_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure slideshow media directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_slideshow_media_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure local user bin directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_home }}/.local/bin"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
+    - name: Ensure desktop autostart directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_autostart_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+      when: dropbox_enable_desktop_autostart | bool
+
+    - name: Create digital frame player start script
+      ansible.builtin.copy:
+        dest: "{{ dropbox_player_script }}"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+
+          export DISPLAY=:0
+          export XAUTHORITY="{{ dropbox_home }}/.Xauthority"
+
+          if command -v xset >/dev/null 2>&1; then
+            xset s off -dpms s noblank >/dev/null 2>&1 || true
+          fi
+
+          until [ -f "{{ dropbox_playlist_file }}" ]; do
+            sleep 10
+          done
+
+          exec /usr/bin/mpv \
+            --fs \
+            --shuffle \
+            --loop-playlist=inf \
+            --no-terminal \
+            --image-display-duration={{ dropbox_image_display_duration }} \
+            --playlist="{{ dropbox_playlist_file }}"
+      when: dropbox_enable_desktop_autostart | bool
+
+    - name: Create desktop autostart entry for digital frame
+      ansible.builtin.copy:
+        dest: "{{ dropbox_autostart_file }}"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0644'
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Name=Digital Frame
+          Exec={{ dropbox_player_script }}
+          X-GNOME-Autostart-enabled=true
+      when: dropbox_enable_desktop_autostart | bool
+
+    - name: Print gallery status
+      ansible.builtin.debug:
+        msg:
+          - "Gallery wurde konfiguriert."
+          - "Download-Ziel (von Dropbox): {{ dropbox_download_dir }}"
+          - "Anzeige-Medien: {{ dropbox_slideshow_media_dir }}"
+          - "Playlist: {{ dropbox_playlist_file }}"
+          - "Player-Startscript: {{ dropbox_player_script }}"
+          - "Desktop-Autostart: {{ dropbox_autostart_file if dropbox_enable_desktop_autostart else 'deaktiviert' }}"

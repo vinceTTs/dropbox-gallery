@@ -28,4 +28,9 @@ sudo apt install -y ansible
 # Run the Ansible playbook
 echo ""
 echo "Step 4/4: Running Ansible playbook..."
-ansible-playbook dropbox-gallery/ansible.yml
+ansible-playbook -i dropbox-gallery/inventory-local.ini dropbox-gallery/ansible/ssh.yml
+
+ansible-playbook -i dropbox-gallery/inventory-local.ini dropbox-gallery/ansible/auto_update.yml -K
+sudo systemctl is-enabled auto-update.timer
+sudo systemctl is-active auto-update.timer
+sudo systemctl status auto-update.timer --no-pager

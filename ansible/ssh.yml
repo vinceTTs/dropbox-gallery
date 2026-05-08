@@ -1,0 +1,42 @@
+- hosts: raspi
+  become: yes
+  vars:
+    static_ip: 192.168.1.99/24
+    static_router: 192.168.1.1
+    static_dns: "1.1.1.1 8.8.8.8"
+
+  tasks:
+    - name: Install OpenSSH server
+      apt:
+        name: openssh-server
+        state: present
+        update_cache: yes
+
+    - name: Ensure SSH service is enabled and running
+      systemd:
+        name: ssh
+        enabled: yes
+        state: started
+
+    - name: Configure static IP for default network interface
+      blockinfile:
+        path: /etc/dhcpcd.conf
+        marker: "# {mark} ANSIBLE STATIC IP"
+        block: |
+          interface {{ ansible_default_ipv4.interface }}
+          static ip_address={{ static_ip }}
+          static routers={{ static_router }}
+          static domain_name_servers={{ static_dns }}
+      notify: Restart dhcpcd
+
+    - name: Show note for internet reachability
+      debug:
+        msg:
+          - "SSH is enabled locally on {{ static_ip.split('/')[0] }}."
+          - "For access from the internet, configure router port-forwarding TCP 22 to {{ static_ip.split('/')[0] }}."
+
+  handlers:
+    - name: Restart dhcpcd
+      systemd:
+        name: dhcpcd
+        state: restarted

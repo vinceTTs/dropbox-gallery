@@ -36,8 +36,10 @@ Token behavior:
 
 Update refresh token (only when revoked/invalid):
 
-1. Overwrite `credentials/dropbox_refresh_token.txt` with the new refresh token.
-2. Run `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K` again.
+1. Run `sudo /usr/local/bin/dropbox-authorize.sh` on the Raspberry Pi.
+2. The script stores the refresh token automatically.
+3. If needed, pass a custom output path: `sudo /usr/local/bin/dropbox-authorize.sh /path/to/dropbox_refresh_token.txt`
+4. Run `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K` again.
 
 ## dropbox and gallery split
 The setup is split into two playbooks:

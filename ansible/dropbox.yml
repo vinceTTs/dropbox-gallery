@@ -13,12 +13,12 @@
     dropbox_config_file: "{{ dropbox_config_dir }}/rclone.conf"
     dropbox_client_id_file: "{{ playbook_dir }}/../credentials/dropbox_key.txt"
     dropbox_client_secret_file: "{{ playbook_dir }}/../credentials/dropbox_secret.txt"
-    dropbox_client_id_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_id_file) | trim }}"
-    dropbox_client_secret_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_secret_file) | trim }}"
+    dropbox_client_id_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_id_file, errors='ignore') | trim }}"
+    dropbox_client_secret_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_secret_file, errors='ignore') | trim }}"
     dropbox_client_id_effective: "{{ dropbox_client_id_from_file }}"
     dropbox_client_secret_effective: "{{ dropbox_client_secret_from_file }}"
     dropbox_refresh_token_file: "{{ playbook_dir }}/../credentials/dropbox_refresh_token.txt"
-    dropbox_refresh_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_refresh_token_file) | trim }}"
+    dropbox_refresh_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_refresh_token_file, errors='ignore') | trim }}"
     dropbox_oauth_token_url: "https://api.dropboxapi.com/oauth2/token"
     dropbox_auth_effective: ""
     dropbox_source_path: ""
@@ -416,13 +416,24 @@
 
           CLIENT_ID="{{ dropbox_client_id_effective }}"
           CLIENT_SECRET="{{ dropbox_client_secret_effective }}"
+          REFRESH_TOKEN_FILE_DEFAULT="{{ dropbox_refresh_token_file }}"
+          REFRESH_TOKEN_FILE="${1:-$REFRESH_TOKEN_FILE_DEFAULT}"
 
           if [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
             echo "Fehlende Dropbox App-Daten. Lege {{ dropbox_client_id_file }} und {{ dropbox_client_secret_file }} als Textdateien an." >&2
             exit 1
           fi
 
-          exec rclone authorize dropbox "$CLIENT_ID" "$CLIENT_SECRET"
+          TOKEN_JSON="$(rclone authorize dropbox "$CLIENT_ID" "$CLIENT_SECRET")"
+
+            REFRESH_TOKEN="$(printf '%s' "$TOKEN_JSON" | /usr/bin/python3 -c "import json,re,sys; raw=sys.stdin.read().strip(); m=re.search(r'\\{.*\\}', raw, re.S); sys.exit(1) if not m else None; token=json.loads(m.group(0)).get('refresh_token',''); sys.exit(2) if not token else None; print(token)")"
+
+          mkdir -p "$(dirname "$REFRESH_TOKEN_FILE")"
+          printf '%s\n' "$REFRESH_TOKEN" > "$REFRESH_TOKEN_FILE"
+          chmod 600 "$REFRESH_TOKEN_FILE"
+
+          echo "Refresh-Token gespeichert in: $REFRESH_TOKEN_FILE"
+          echo "Danach ausführen: ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K"
 
     - name: Create Dropbox copy script
       ansible.builtin.copy:
@@ -545,7 +556,7 @@
           - "Manueller Einmal-Start: sudo systemctl start dropbox-rclone-copy.service"
           - "Access-Token wird mit Refresh-Token automatisch erneuert."
           - "Refresh-Token-Datei: {{ dropbox_refresh_token_file }}"
-          - "Neuen Token im Browser erzeugen: /usr/local/bin/dropbox-authorize.sh"
+          - "Neuen Refresh-Token erzeugen und speichern: sudo /usr/local/bin/dropbox-authorize.sh [optionaler-zielpfad]"
           - "Gallery-Setup ausführen: ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K"
           - "Log-Datei: {{ dropbox_copy_log_file }}"
           - "Filter: {{ (dropbox_filter_patterns | join(', ')) if (dropbox_filter_patterns | length > 0) else 'kein Filter' }}"

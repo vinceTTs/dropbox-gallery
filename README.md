@@ -27,11 +27,16 @@ Required files (text files) in `credentials/`:
 
 * `dropbox_key.txt` (client_id)
 * `dropbox_secret.txt` (client_secret)
-* `dropbox_access_token.txt` (access token)
+* `dropbox_refresh_token.txt` (refresh token)
 
-Update token:
+Token behavior:
 
-1. Overwrite `credentials/dropbox_access_token.txt` with the new token.
+1. Access-Tokens are short-lived (typically a few hours).
+2. The setup now refreshes Access-Tokens automatically via `refresh_token` without user interaction.
+
+Update refresh token (only when revoked/invalid):
+
+1. Overwrite `credentials/dropbox_refresh_token.txt` with the new refresh token.
 2. Run `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K` again.
 
 ## dropbox and gallery split

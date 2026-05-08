@@ -17,10 +17,10 @@
     dropbox_client_secret_from_file: "{{ lookup('ansible.builtin.file', dropbox_client_secret_file) | trim }}"
     dropbox_client_id_effective: "{{ dropbox_client_id_from_file }}"
     dropbox_client_secret_effective: "{{ dropbox_client_secret_from_file }}"
-    dropbox_access_token_file: "{{ playbook_dir }}/../credentials/dropbox_access_token.txt"
-    dropbox_access_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_access_token_file, errors='ignore') | trim }}"
-    dropbox_access_token_effective: "{{ dropbox_access_token_from_file }}"
-    dropbox_auth_effective: "{{ dropbox_access_token_effective }}"
+    dropbox_refresh_token_file: "{{ playbook_dir }}/../credentials/dropbox_refresh_token.txt"
+    dropbox_refresh_token_from_file: "{{ lookup('ansible.builtin.file', dropbox_refresh_token_file) | trim }}"
+    dropbox_oauth_token_url: "https://api.dropboxapi.com/oauth2/token"
+    dropbox_auth_effective: ""
     dropbox_source_path: ""
     dropbox_copy_enable: true
     dropbox_copy_schedule: "*-*-* 03:00:00"
@@ -55,15 +55,6 @@
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/vars/shared_paths.yml"
 
-    # - name: Reject direct variable input for Dropbox app credentials
-    #   ansible.builtin.assert:
-    #     that:
-    #       - dropbox_client_id is not defined
-    #       - dropbox_client_secret is not defined
-    #     fail_msg: >-
-    #       Dropbox client_id/client_secret sind nur als Dateien erlaubt.
-    #       Verwende ausschließlich {{ dropbox_client_id_file }} und {{ dropbox_client_secret_file }}.
-
     - name: Ensure Dropbox app credential files are present
       ansible.builtin.assert:
         that:
@@ -74,23 +65,41 @@
           und {{ dropbox_client_secret_file }} (client_secret) als Textdateien an.
       no_log: true
 
-    # - name: Reject direct variable input for Dropbox token
-    #   ansible.builtin.assert:
-    #     that:
-    #       - dropbox_token is not defined
-    #       - dropbox_access_token is not defined
-    #     fail_msg: >-
-    #       Dropbox access token ist nur als Datei erlaubt.
-    #       Verwende ausschließlich {{ dropbox_access_token_file }}.
-
-    - name: Ensure Dropbox access token file is present
+    - name: Ensure Dropbox refresh token file is present
       ansible.builtin.assert:
         that:
-          - dropbox_auth_effective | length > 0
+          - dropbox_refresh_token_from_file | length > 0
         fail_msg: >-
-          Keine Dropbox-Anmeldedaten gefunden. Lege {{ dropbox_access_token_file }}
-          als Textdatei mit einem gültigen Access-Token an.
-        success_msg: Dropbox-Anmeldedaten gefunden.
+          Kein Dropbox Refresh-Token gefunden. Lege {{ dropbox_refresh_token_file }}
+          als Textdatei mit einem gültigen Refresh-Token an.
+        success_msg: Dropbox Refresh-Token gefunden.
+      no_log: true
+
+    - name: Request short-lived access token from Dropbox refresh token
+      ansible.builtin.uri:
+        url: "{{ dropbox_oauth_token_url }}"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: refresh_token
+          refresh_token: "{{ dropbox_refresh_token_from_file }}"
+          client_id: "{{ dropbox_client_id_effective }}"
+          client_secret: "{{ dropbox_client_secret_effective }}"
+        return_content: true
+        status_code: 200
+      register: dropbox_oauth_refresh
+      no_log: true
+
+    - name: Build Dropbox token payload for rclone
+      ansible.builtin.set_fact:
+        dropbox_auth_effective: >-
+          {{
+            {
+              'access_token': dropbox_oauth_refresh.json.access_token,
+              'token_type': (dropbox_oauth_refresh.json.token_type | default('bearer')),
+              'refresh_token': dropbox_refresh_token_from_file
+            } | to_json
+          }}
       no_log: true
 
   tasks:
@@ -534,7 +543,8 @@
           - "Bilder lokal verkleinern: {{ dropbox_resize_images }} (max {{ dropbox_resize_max_dimension }} px)"
           - "Zeitplan: {{ dropbox_copy_schedule }}"
           - "Manueller Einmal-Start: sudo systemctl start dropbox-rclone-copy.service"
-          - "Access-Token aktualisieren: Datei {{ dropbox_access_token_file }} überschreiben und Playbook neu ausführen"
+          - "Access-Token wird mit Refresh-Token automatisch erneuert."
+          - "Refresh-Token-Datei: {{ dropbox_refresh_token_file }}"
           - "Neuen Token im Browser erzeugen: /usr/local/bin/dropbox-authorize.sh"
           - "Gallery-Setup ausführen: ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K"
           - "Log-Datei: {{ dropbox_copy_log_file }}"

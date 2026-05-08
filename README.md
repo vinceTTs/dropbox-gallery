@@ -52,6 +52,31 @@ Run both (recommended order):
 1. `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K`
 2. `ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K`
 
+## less sudo password prompts
+After first installation, `ansible/dropbox.yml` installs a restricted sudoers rule so frequent operations do not ask for password again.
+
+Passwordless commands for user `raspi`:
+
+* `/usr/local/bin/dropbox-authorize.sh`
+* `/usr/local/bin/dropbox-reconnect.sh`
+* `systemctl start dropbox-rclone-copy.service`
+* `systemctl restart dropbox-rclone-copy.timer`
+* `systemctl status dropbox-rclone-copy.service`
+
+Run once to apply:
+
+* `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K`
+
+Note: running full Ansible setup playbooks with `become` still needs admin rights.
+
+## desktop shortcuts on Raspberry Pi
+`ansible/gallery.yml` creates desktop shortcuts in `~/Desktop`:
+
+* `Dropbox Verbinden`
+* `Dropbox Neu-Verbinden`
+* `Dropbox Sync Starten`
+* `Gallery Starten`
+
 ## shared folders for both playbooks
 Shared folder variables are defined in `ansible/vars/shared_paths.yml` and loaded by both playbooks.
 

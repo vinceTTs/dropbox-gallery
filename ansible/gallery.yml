@@ -12,6 +12,7 @@
     dropbox_player_script: "{{ dropbox_home }}/.local/bin/start-digital-frame.sh"
     dropbox_autostart_dir: "{{ dropbox_home }}/.config/autostart"
     dropbox_autostart_file: "{{ dropbox_autostart_dir }}/digital-frame.desktop"
+    dropbox_desktop_dir: "{{ dropbox_home }}/Desktop"
     dropbox_enable_desktop_autostart: true
 
   pre_tasks:
@@ -62,6 +63,14 @@
         mode: '0755'
       when: dropbox_enable_desktop_autostart | bool
 
+    - name: Ensure desktop directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_desktop_dir }}"
+        state: directory
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+
     - name: Create digital frame player start script
       ansible.builtin.copy:
         dest: "{{ dropbox_player_script }}"
@@ -106,6 +115,74 @@
           X-GNOME-Autostart-enabled=true
       when: dropbox_enable_desktop_autostart | bool
 
+    - name: Create desktop shortcut for Dropbox connect
+      ansible.builtin.copy:
+        dest: "{{ dropbox_desktop_dir }}/Dropbox Verbinden.desktop"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Version=1.0
+          Name=Dropbox Verbinden
+          Comment=Neuen Refresh-Token im Browser erzeugen
+          Exec=/usr/bin/bash -lc "sudo /usr/local/bin/dropbox-authorize.sh"
+          Terminal=true
+          Icon=network-workgroup
+          Categories=Utility;
+
+    - name: Create desktop shortcut for Dropbox reconnect
+      ansible.builtin.copy:
+        dest: "{{ dropbox_desktop_dir }}/Dropbox Neu-Verbinden.desktop"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Version=1.0
+          Name=Dropbox Neu-Verbinden
+          Comment=Dropbox OAuth-Verbindung erneuern
+          Exec=/usr/bin/bash -lc "sudo /usr/local/bin/dropbox-reconnect.sh"
+          Terminal=true
+          Icon=view-refresh
+          Categories=Utility;
+
+    - name: Create desktop shortcut for Dropbox sync now
+      ansible.builtin.copy:
+        dest: "{{ dropbox_desktop_dir }}/Dropbox Sync Starten.desktop"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Version=1.0
+          Name=Dropbox Sync Starten
+          Comment=Startet den manuellen Dropbox Sync Lauf
+          Exec=/usr/bin/bash -lc "sudo /usr/bin/systemctl start dropbox-rclone-copy.service"
+          Terminal=true
+          Icon=folder-sync
+          Categories=Utility;
+
+    - name: Create desktop shortcut for Gallery start
+      ansible.builtin.copy:
+        dest: "{{ dropbox_desktop_dir }}/Gallery Starten.desktop"
+        owner: "{{ dropbox_user }}"
+        group: "{{ dropbox_group }}"
+        mode: '0755'
+        content: |
+          [Desktop Entry]
+          Type=Application
+          Version=1.0
+          Name=Gallery Starten
+          Comment=Startet den digitalen Bilderrahmen
+          Exec={{ dropbox_player_script }}
+          Terminal=false
+          Icon=multimedia-photo-viewer
+          Categories=AudioVideo;
+
     - name: Print gallery status
       ansible.builtin.debug:
         msg:
@@ -115,3 +192,4 @@
           - "Playlist: {{ dropbox_playlist_file }}"
           - "Player-Startscript: {{ dropbox_player_script }}"
           - "Desktop-Autostart: {{ dropbox_autostart_file if dropbox_enable_desktop_autostart else 'deaktiviert' }}"
+          - "Desktop-Verknüpfungen in: {{ dropbox_desktop_dir }}"

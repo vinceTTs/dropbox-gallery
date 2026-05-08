@@ -1,0 +1,25 @@
+- hosts: raspi
+  become: yes
+  vars:
+    reboot_required_file: /var/run/reboot-required
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+
+    - name: Check if reboot is required
+      stat:
+        path: "{{ reboot_required_file }}"
+      register: reboot_flag
+
+    - name: Reboot if required
+      reboot:
+        msg: "Reboot triggered by Ansible after updates"
+        reboot_timeout: 600
+      when: reboot_flag.stat.exists

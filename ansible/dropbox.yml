@@ -1,7 +1,7 @@
 ---
 - name: Configure Dropbox access on Raspberry Pi
   hosts: localhost
-  connection: local
+  connection: raspi
   become: true
 
   vars:

@@ -1,0 +1,48 @@
+- hosts: raspi
+  become: yes
+  vars:
+    reboot_required_file: /var/run/reboot-required
+    service_path: /etc/systemd/system/auto-update.service
+    timer_path: /etc/systemd/system/auto-update.timer
+
+  tasks:
+    - name: Ensure systemd service for auto update exists
+      copy:
+        dest: "{{ service_path }}"
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Automatic system update via Ansible
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/ansible-playbook /opt/ansible/auto_update_run.yml -i /opt/ansible/inventory.ini
+          Nice=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Ensure systemd timer for auto update exists
+      copy:
+        dest: "{{ timer_path }}"
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Daily automatic system update timer
+
+          [Timer]
+          OnCalendar=*-*-* 03:30:00
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start auto-update timer
+      systemd:
+        name: auto-update.timer
+        enabled: yes
+        state: started

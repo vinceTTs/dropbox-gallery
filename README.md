@@ -21,10 +21,16 @@ Useful checks on Raspberry Pi:
 * `sudo systemctl list-timers auto-update.timer --all`
 * `sudo systemctl status auto-update.service --no-pager -l`
 * `sudo journalctl -u auto-update.service -n 200 --no-pager`
+* `sudo journalctl --disk-usage`
 
 Manual test run:
 
 * `sudo systemctl start auto-update.service`
+
+Log retention:
+
+* Config file: `/etc/systemd/journald.conf.d/90-auto-update-retention.conf`
+* Defaults set by playbook: `SystemMaxUse=200M`, `SystemKeepFree=100M`, `MaxRetentionSec=14day`
 
 ## install ssh + static ip
 Run the SSH setup playbook:

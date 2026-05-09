@@ -5,6 +5,11 @@
     script_path: /usr/local/bin/auto-update.sh
     service_path: /etc/systemd/system/auto-update.service
     timer_path: /etc/systemd/system/auto-update.timer
+    journald_dropin_dir: /etc/systemd/journald.conf.d
+    journald_dropin_file: /etc/systemd/journald.conf.d/90-auto-update-retention.conf
+    journald_system_max_use: 200M
+    journald_system_keep_free: 100M
+    journald_max_retention_sec: 14day
 
   tasks:
     - name: Ensure auto update script exists
@@ -26,10 +31,10 @@
           export DEBIAN_FRONTEND=noninteractive
 
           echo "[$(date --iso-8601=seconds)] auto-update started"
-          apt-get update
-          apt-get -y dist-upgrade
-          apt-get -y autoremove
-          apt-get -y autoclean
+          apt-get -y -qq update
+          apt-get -y -qq dist-upgrade
+          apt-get -y -qq autoremove
+          apt-get -y -qq autoclean
 
           if [ -f "{{ reboot_required_file }}" ]; then
             echo "[$(date --iso-8601=seconds)] reboot required; scheduling reboot"
@@ -65,11 +70,32 @@
           Description=Daily automatic system update timer
 
           [Timer]
-          OnCalendar=*:0/30
+          OnCalendar=*-*-* 03:30:00
           Persistent=true
 
           [Install]
           WantedBy=timers.target
+
+    - name: Ensure journald drop-in directory exists
+      file:
+        path: "{{ journald_dropin_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure journald retention limits
+      copy:
+        dest: "{{ journald_dropin_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Journal]
+          SystemMaxUse={{ journald_system_max_use }}
+          SystemKeepFree={{ journald_system_keep_free }}
+          MaxRetentionSec={{ journald_max_retention_sec }}
+      notify: Restart systemd-journald
 
     - name: Reload systemd daemon
       systemd:
@@ -80,3 +106,9 @@
         name: auto-update.timer
         enabled: yes
         state: started
+
+  handlers:
+    - name: Restart systemd-journald
+      systemd:
+        name: systemd-journald
+        state: restarted

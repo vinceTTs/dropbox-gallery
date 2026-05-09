@@ -2,22 +2,56 @@
   become: yes
   vars:
     reboot_required_file: /var/run/reboot-required
+    script_path: /usr/local/bin/auto-update.sh
     service_path: /etc/systemd/system/auto-update.service
     timer_path: /etc/systemd/system/auto-update.timer
 
   tasks:
+    - name: Ensure auto update script exists
+      copy:
+        dest: "{{ script_path }}"
+        mode: '0755'
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          LOCK_FILE="/var/lock/auto-update.lock"
+          exec 9>"$LOCK_FILE"
+
+          if ! flock -n 9; then
+            echo "[$(date --iso-8601=seconds)] auto-update already running; exiting"
+            exit 0
+          fi
+
+          export DEBIAN_FRONTEND=noninteractive
+
+          echo "[$(date --iso-8601=seconds)] auto-update started"
+          apt-get update
+          apt-get -y dist-upgrade
+          apt-get -y autoremove
+          apt-get -y autoclean
+
+          if [ -f "{{ reboot_required_file }}" ]; then
+            echo "[$(date --iso-8601=seconds)] reboot required; scheduling reboot"
+            /sbin/shutdown -r +1 "Reboot triggered by auto-update"
+          fi
+
+          echo "[$(date --iso-8601=seconds)] auto-update finished"
+
     - name: Ensure systemd service for auto update exists
       copy:
         dest: "{{ service_path }}"
         mode: '0644'
         content: |
           [Unit]
-          Description=Automatic system update via Ansible
+          Description=Automatic system update via bash script
 
           [Service]
           Type=oneshot
-          ExecStart=/usr/bin/ansible-playbook /opt/ansible/auto_update_run.yml -i /opt/ansible/inventory.ini
+          ExecStart={{ script_path }}
           Nice=10
+          StandardOutput=journal
+          StandardError=journal
 
           [Install]
           WantedBy=multi-user.target

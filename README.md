@@ -12,6 +12,20 @@ If you see `sudo: a password is required`, run Ansible with a sudo password prom
 * `ansible-playbook ansible/auto_update.yml -i inventory-remote.ini -K`
 * `ansible-playbook ansible/auto_update_run.yml -i inventory-remote.ini -K`
 
+## auto update logs
+If `auto-update.timer` shows `active (waiting)`, this is normal while it waits for the next schedule.
+
+Useful checks on Raspberry Pi:
+
+* `sudo systemctl status auto-update.timer --no-pager`
+* `sudo systemctl list-timers auto-update.timer --all`
+* `sudo systemctl status auto-update.service --no-pager -l`
+* `sudo journalctl -u auto-update.service -n 200 --no-pager`
+
+Manual test run:
+
+* `sudo systemctl start auto-update.service`
+
 ## install ssh + static ip
 Run the SSH setup playbook:
 

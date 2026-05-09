@@ -65,7 +65,7 @@
           Description=Daily automatic system update timer
 
           [Timer]
-          OnCalendar=*:0/10
+          OnCalendar=*:0/30
           Persistent=true
 
           [Install]

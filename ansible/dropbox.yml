@@ -24,9 +24,13 @@
     dropbox_source_path: ""
     dropbox_copy_enable: true
     dropbox_copy_schedule: "*-*-* 03:00:00"
+    dropbox_token_refresh_schedule: "*:0/45"
     dropbox_filter_file: "{{ dropbox_config_dir }}/dropbox-download.filter"
     dropbox_copy_log_file: "{{ dropbox_config_dir }}/dropbox-rclone-copy.log"
     dropbox_sudoers_file: /etc/sudoers.d/90-dropbox-gallery
+    dropbox_token_refresh_script: /usr/local/bin/dropbox-refresh-token.py
+    dropbox_token_refresh_service_path: /etc/systemd/system/dropbox-token-refresh.service
+    dropbox_token_refresh_timer_path: /etc/systemd/system/dropbox-token-refresh.timer
     dropbox_recent_days: 7
     dropbox_min_files: 10
     dropbox_resize_images: true
@@ -104,11 +108,6 @@
       no_log: true
 
   tasks:
-    # - name: Update apt cache
-    #   ansible.builtin.apt:
-    #     update_cache: true
-    #     cache_valid_time: 3600
-
     - name: Install rclone and FUSE packages
       ansible.builtin.apt:
         name:
@@ -455,6 +454,163 @@
           } >> "{{ dropbox_copy_log_file }}" 2>&1
       when: dropbox_copy_enable | bool
 
+    - name: Create Dropbox token refresh script
+      ansible.builtin.copy:
+        dest: "{{ dropbox_token_refresh_script }}"
+        owner: root
+        group: root
+        mode: '0755'
+        content: |
+          #!/usr/bin/env python3
+          import argparse
+          import json
+          import pathlib
+          import re
+          import sys
+          import urllib.parse
+          import urllib.request
+
+
+          def read_section_lines(lines, remote_name):
+              section_start = None
+              section_end = len(lines)
+              target = f"[{remote_name}]"
+
+              for idx, line in enumerate(lines):
+                  if line.strip() == target:
+                      section_start = idx + 1
+                      break
+
+              if section_start is None:
+                  raise RuntimeError(f"Remote section not found: {target}")
+
+              for idx in range(section_start, len(lines)):
+                  if lines[idx].lstrip().startswith("["):
+                      section_end = idx
+                      break
+
+              return section_start, section_end
+
+
+          def get_key_value(lines, start, end, key):
+              pattern = re.compile(rf"^\s*{re.escape(key)}\s*=\s*(.*)$")
+              for idx in range(start, end):
+                  match = pattern.match(lines[idx])
+                  if match:
+                      return idx, match.group(1).strip()
+              return None, ""
+
+
+          def main():
+              parser = argparse.ArgumentParser()
+              parser.add_argument("--config", required=True)
+              parser.add_argument("--remote", required=True)
+              parser.add_argument("--token-url", required=True)
+              args = parser.parse_args()
+
+              config_path = pathlib.Path(args.config)
+              if not config_path.exists():
+                  raise RuntimeError(f"Config file not found: {config_path}")
+
+              lines = config_path.read_text(encoding="utf-8").splitlines(True)
+              start, end = read_section_lines(lines, args.remote)
+
+              _, client_id = get_key_value(lines, start, end, "client_id")
+              _, client_secret = get_key_value(lines, start, end, "client_secret")
+              token_idx, token_raw = get_key_value(lines, start, end, "token")
+
+              if not client_id or not client_secret:
+                  raise RuntimeError("client_id/client_secret missing in rclone config")
+              if token_idx is None or not token_raw:
+                  raise RuntimeError("token missing in rclone config")
+
+              token_obj = json.loads(token_raw)
+              refresh_token = token_obj.get("refresh_token", "")
+              if not refresh_token:
+                  raise RuntimeError("refresh_token missing in token JSON")
+
+              body = urllib.parse.urlencode(
+                  {
+                      "grant_type": "refresh_token",
+                      "refresh_token": refresh_token,
+                      "client_id": client_id,
+                      "client_secret": client_secret,
+                  }
+              ).encode("utf-8")
+
+              req = urllib.request.Request(args.token_url, data=body, method="POST")
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  payload = json.loads(resp.read().decode("utf-8"))
+
+              access_token = payload.get("access_token", "")
+              if not access_token:
+                  raise RuntimeError("No access_token returned by Dropbox OAuth endpoint")
+
+              updated_token = json.dumps(
+                  {
+                      "access_token": access_token,
+                      "token_type": payload.get("token_type", "bearer"),
+                      "refresh_token": refresh_token,
+                  },
+                  separators=(",", ":"),
+              )
+
+              lines[token_idx] = f"token = {updated_token}\n"
+              tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+              tmp_path.write_text("".join(lines), encoding="utf-8")
+              tmp_path.replace(config_path)
+
+              print("Dropbox access token refreshed successfully")
+
+
+          if __name__ == "__main__":
+              try:
+                  main()
+              except Exception as exc:
+                  print(f"ERROR: {exc}", file=sys.stderr)
+                  sys.exit(1)
+
+    - name: Create systemd service for Dropbox token refresh
+      ansible.builtin.copy:
+        dest: "{{ dropbox_token_refresh_service_path }}"
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Refresh Dropbox access token via refresh token
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          User={{ dropbox_user }}
+          Group={{ dropbox_group }}
+          ExecStart={{ dropbox_token_refresh_script }} --config {{ dropbox_config_file }} --remote {{ dropbox_remote_name }} --token-url {{ dropbox_oauth_token_url }}
+          Nice=10
+          StandardOutput=journal
+          StandardError=journal
+
+    - name: Create systemd timer for Dropbox token refresh
+      ansible.builtin.copy:
+        dest: "{{ dropbox_token_refresh_timer_path }}"
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Periodically refresh Dropbox access token
+
+          [Timer]
+          OnCalendar={{ dropbox_token_refresh_schedule }}
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Enable and start Dropbox token refresh timer
+      ansible.builtin.systemd:
+        name: dropbox-token-refresh.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
     - name: Allow passwordless sudo for frequent Dropbox operations
       ansible.builtin.copy:
         dest: "{{ dropbox_sudoers_file }}"
@@ -463,7 +619,7 @@
         mode: '0440'
         validate: /usr/sbin/visudo -cf %s
         content: |
-          Cmnd_Alias DROPBOX_GALLERY_CMDS = /usr/local/bin/dropbox-authorize.sh, /usr/local/bin/dropbox-reconnect.sh, /usr/bin/systemctl start dropbox-rclone-copy.service, /usr/bin/systemctl restart dropbox-rclone-copy.timer, /usr/bin/systemctl status dropbox-rclone-copy.service
+          Cmnd_Alias DROPBOX_GALLERY_CMDS = /usr/local/bin/dropbox-authorize.sh, /usr/local/bin/dropbox-reconnect.sh, /usr/bin/systemctl start dropbox-rclone-copy.service, /usr/bin/systemctl restart dropbox-rclone-copy.timer, /usr/bin/systemctl status dropbox-rclone-copy.service, /usr/bin/systemctl start dropbox-token-refresh.service, /usr/bin/systemctl status dropbox-token-refresh.service
           {{ dropbox_user }} ALL=(root) NOPASSWD: DROPBOX_GALLERY_CMDS
 
     - name: Test Dropbox connection
@@ -568,6 +724,8 @@
           - "Manueller Einmal-Start: sudo systemctl start dropbox-rclone-copy.service"
           - "Access-Token wird mit Refresh-Token automatisch erneuert."
           - "Refresh-Token-Datei: {{ dropbox_refresh_token_file }}"
+          - "Token-Refresh Service manuell: sudo systemctl start dropbox-token-refresh.service"
+          - "Token-Refresh Logs: sudo journalctl -u dropbox-token-refresh.service -n 100 --no-pager"
           - "Neuen Refresh-Token erzeugen und speichern: sudo /usr/local/bin/dropbox-authorize.sh [optionaler-zielpfad]"
           - "Gallery-Setup ausführen: ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K"
           - "Log-Datei: {{ dropbox_copy_log_file }}"

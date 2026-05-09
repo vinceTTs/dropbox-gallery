@@ -10,7 +10,6 @@ image gallery on raspberry pi
 If you see `sudo: a password is required`, run Ansible with a sudo password prompt:
 
 * `ansible-playbook ansible/auto_update.yml -i inventory-remote.ini -K`
-* `ansible-playbook ansible/auto_update_run.yml -i inventory-remote.ini -K`
 
 ## auto update logs
 If `auto-update.timer` shows `active (waiting)`, this is normal while it waits for the next schedule.
@@ -60,6 +59,19 @@ Update refresh token (only when revoked/invalid):
 2. The script stores the refresh token automatically.
 3. If needed, pass a custom output path: `sudo /usr/local/bin/dropbox-authorize.sh /path/to/dropbox_refresh_token.txt`
 4. Run `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K` again.
+
+Automatic token refresh service:
+
+* Timer: `dropbox-token-refresh.timer`
+* Service: `dropbox-token-refresh.service`
+* Default schedule: every 45 minutes
+
+Useful checks:
+
+* `sudo systemctl status dropbox-token-refresh.timer --no-pager`
+* `sudo systemctl list-timers dropbox-token-refresh.timer --all`
+* `sudo systemctl start dropbox-token-refresh.service`
+* `sudo journalctl -u dropbox-token-refresh.service -n 100 --no-pager`
 
 ## dropbox and gallery split
 The setup is split into two playbooks:

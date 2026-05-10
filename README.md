@@ -84,6 +84,16 @@ Run both (recommended order):
 1. `ansible-playbook ansible/dropbox.yml -i inventory-remote.ini -K`
 2. `ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K`
 
+Gallery refresh after Dropbox sync:
+
+* `ansible/dropbox.yml` restarts the gallery player automatically after a successful sync.
+* Manual test: `sudo systemctl start dropbox-rclone-copy.service`
+
+Smoother video playback on Raspberry Pi:
+
+* `ansible/gallery.yml` enables a low-lag mpv setup (`profile=fast`, `hwdec=auto-safe`, frame dropping, cache).
+* If videos still stutter, reduce source resolution/bitrate further (recommended max ~1280p, low/medium bitrate H.264).
+
 ## less sudo password prompts
 After first installation, `ansible/dropbox.yml` installs a restricted sudoers rule so frequent operations do not ask for password again.
 

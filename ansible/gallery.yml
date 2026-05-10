@@ -10,6 +10,10 @@
     dropbox_home: "/home/{{ dropbox_user }}"
     dropbox_image_display_duration: 20
     dropbox_player_script: "{{ dropbox_home }}/.local/bin/start-digital-frame.sh"
+    dropbox_mpv_hwdec: auto-safe
+    dropbox_mpv_profile: fast
+    dropbox_mpv_vd_threads: 2
+    dropbox_mpv_demuxer_readahead_secs: 20
     dropbox_autostart_dir: "{{ dropbox_home }}/.config/autostart"
     dropbox_autostart_file: "{{ dropbox_autostart_dir }}/digital-frame.desktop"
     dropbox_desktop_dir: "{{ dropbox_home }}/Desktop"
@@ -97,6 +101,12 @@
             --shuffle \
             --loop-playlist=inf \
             --no-terminal \
+            --profile={{ dropbox_mpv_profile }} \
+            --hwdec={{ dropbox_mpv_hwdec }} \
+            --framedrop=vo \
+            --vd-lavc-threads={{ dropbox_mpv_vd_threads }} \
+            --cache=yes \
+            --demuxer-readahead-secs={{ dropbox_mpv_demuxer_readahead_secs }} \
             --image-display-duration={{ dropbox_image_display_duration }} \
             --playlist="{{ dropbox_playlist_file }}"
       when: dropbox_enable_desktop_autostart | bool
@@ -191,5 +201,6 @@
           - "Anzeige-Medien: {{ dropbox_slideshow_media_dir }}"
           - "Playlist: {{ dropbox_playlist_file }}"
           - "Player-Startscript: {{ dropbox_player_script }}"
+          - "MPV-Profil: {{ dropbox_mpv_profile }}, HW-Decoding: {{ dropbox_mpv_hwdec }}"
           - "Desktop-Autostart: {{ dropbox_autostart_file if dropbox_enable_desktop_autostart else 'deaktiviert' }}"
           - "Desktop-Verknüpfungen in: {{ dropbox_desktop_dir }}"

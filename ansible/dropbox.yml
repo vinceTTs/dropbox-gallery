@@ -24,6 +24,7 @@
     dropbox_source_path: ""
     dropbox_copy_enable: true
     dropbox_copy_schedule: "*-*-* 03:00:00"
+    dropbox_restart_gallery_after_sync: true
     dropbox_token_refresh_schedule: "*:0/45"
     dropbox_filter_file: "{{ dropbox_config_dir }}/dropbox-download.filter"
     dropbox_copy_log_file: "{{ dropbox_config_dir }}/dropbox-rclone-copy.log"
@@ -35,6 +36,7 @@
     dropbox_min_files: 10
     dropbox_resize_images: true
     dropbox_resize_max_dimension: 1920
+    dropbox_player_script: "{{ dropbox_home }}/.local/bin/start-digital-frame.sh"
     dropbox_filter_patterns:
       - "*.jpg"
       - "*.jpeg"
@@ -42,12 +44,8 @@
       - "*.JPEG"
       - "*.heic"
       - "*.HEIC"
-      - "*.mp4"
-      - "*.MP4"
       - "*.mov"
       - "*.MOV"
-      - "*.m4v"
-      - "*.M4V"
     dropbox_mount_point: /mnt/dropbox
     dropbox_enable_mount: false
     dropbox_mount_options:
@@ -450,6 +448,15 @@
           {
             echo "[$(date --iso-8601=seconds)] Starte Dropbox-Medienaktualisierung"
             /usr/bin/python3 /usr/local/bin/dropbox-refresh-media.py
+          {% if dropbox_restart_gallery_after_sync | bool %}
+            if [ -x "{{ dropbox_player_script }}" ]; then
+              echo "[$(date --iso-8601=seconds)] Starte Gallery neu"
+              pkill -f '/usr/bin/mpv .*--playlist=' >/dev/null 2>&1 || true
+              nohup "{{ dropbox_player_script }}" >/dev/null 2>&1 &
+            else
+              echo "[$(date --iso-8601=seconds)] Gallery-Startscript fehlt: {{ dropbox_player_script }}"
+            fi
+          {% endif %}
             echo "[$(date --iso-8601=seconds)] Dropbox-Medienaktualisierung abgeschlossen"
           } >> "{{ dropbox_copy_log_file }}" 2>&1
       when: dropbox_copy_enable | bool
@@ -709,11 +716,7 @@
     - name: Print Dropbox status
       ansible.builtin.debug:
         msg:
-          - "Dropbox wurde mit rclone konfiguriert."
-          - "Remote: {{ dropbox_remote_name }}:"
           - "Config: {{ dropbox_config_file }}"
-          - "Download aktiv: {{ dropbox_copy_enable }}"
-          - "Dropbox-Quelle: {{ dropbox_remote_name }}:{{ dropbox_source_path }}"
           - "Download-Ziel: {{ dropbox_download_dir }}"
           - "Anzeige-Medien: {{ dropbox_slideshow_media_dir }}"
           - "Slideshow-Playlist: {{ dropbox_playlist_file }}"
@@ -722,7 +725,7 @@
           - "Bilder lokal verkleinern: {{ dropbox_resize_images }} (max {{ dropbox_resize_max_dimension }} px)"
           - "Zeitplan: {{ dropbox_copy_schedule }}"
           - "Manueller Einmal-Start: sudo systemctl start dropbox-rclone-copy.service"
-          - "Access-Token wird mit Refresh-Token automatisch erneuert."
+          - "Gallery-Neustart nach Sync: {{ dropbox_restart_gallery_after_sync }}"
           - "Refresh-Token-Datei: {{ dropbox_refresh_token_file }}"
           - "Token-Refresh Service manuell: sudo systemctl start dropbox-token-refresh.service"
           - "Token-Refresh Logs: sudo journalctl -u dropbox-token-refresh.service -n 100 --no-pager"
@@ -730,5 +733,4 @@
           - "Gallery-Setup ausführen: ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K"
           - "Log-Datei: {{ dropbox_copy_log_file }}"
           - "Filter: {{ (dropbox_filter_patterns | join(', ')) if (dropbox_filter_patterns | length > 0) else 'kein Filter' }}"
-          - "Mount aktiv: {{ dropbox_enable_mount }}"
           - "Mount-Pfad: {{ dropbox_mount_point }}"

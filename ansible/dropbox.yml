@@ -451,8 +451,20 @@
           {% if dropbox_restart_gallery_after_sync | bool %}
             if [ -x "{{ dropbox_player_script }}" ]; then
               echo "[$(date --iso-8601=seconds)] Starte Gallery neu"
-              pkill -f '/usr/bin/mpv .*--playlist=' >/dev/null 2>&1 || true
-              nohup "{{ dropbox_player_script }}" >/dev/null 2>&1 &
+              
+              # Kill existing mpv process
+              pkill -u {{ dropbox_user }} -f '/usr/bin/mpv .*--playlist=' >/dev/null 2>&1 || true
+              sleep 1
+              
+              # Start gallery with X11 environment
+              export DISPLAY=:0
+              export XAUTHORITY={{ dropbox_home }}/.Xauthority
+              
+              # Run as {{ dropbox_user }} with environment variables
+              su - {{ dropbox_user }} -c "export DISPLAY=:0; export XAUTHORITY=\$HOME/.Xauthority; nohup {{ dropbox_player_script }} >/dev/null 2>&1 &" \
+                || echo "[$(date --iso-8601=seconds)] Fehler beim Starten des Gallery-Scripts" 
+              
+              echo "[$(date --iso-8601=seconds)] Gallery-Neustart-Befehl ausgeführt"
             else
               echo "[$(date --iso-8601=seconds)] Gallery-Startscript fehlt: {{ dropbox_player_script }}"
             fi

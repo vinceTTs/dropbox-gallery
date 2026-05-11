@@ -27,8 +27,12 @@
     dropbox_restart_gallery_after_sync: true
     dropbox_token_refresh_schedule: "*:0/45"
     dropbox_filter_file: "{{ dropbox_config_dir }}/dropbox-download.filter"
-    dropbox_copy_log_file: "{{ dropbox_config_dir }}/dropbox-rclone-copy.log"
     dropbox_sudoers_file: /etc/sudoers.d/90-dropbox-gallery
+    dropbox_journald_dropin_dir: /etc/systemd/journald.conf.d
+    dropbox_journald_dropin_file: /etc/systemd/journald.conf.d/90-dropbox-retention.conf
+    dropbox_journald_system_max_use: 200M
+    dropbox_journald_system_keep_free: 100M
+    dropbox_journald_max_retention_sec: 14day
     dropbox_token_refresh_script: /usr/local/bin/dropbox-refresh-token.py
     dropbox_token_refresh_service_path: /etc/systemd/system/dropbox-token-refresh.service
     dropbox_token_refresh_timer_path: /etc/systemd/system/dropbox-token-refresh.timer
@@ -443,34 +447,34 @@
           #!/bin/bash
           set -euo pipefail
 
-          mkdir -p "$(dirname "{{ dropbox_copy_log_file }}")"
+          LOCK_FILE="/var/lock/dropbox-copy.lock"
+          exec 9>"$LOCK_FILE"
 
-          {
-            echo "[$(date --iso-8601=seconds)] Starte Dropbox-Medienaktualisierung"
-            /usr/bin/python3 /usr/local/bin/dropbox-refresh-media.py
+          if ! flock -n 9; then
+            echo "[$(date --iso-8601=seconds)] dropbox-copy already running; exiting"
+            exit 0
+          fi
+
+          echo "[$(date --iso-8601=seconds)] Starte Dropbox-Medienaktualisierung"
+          /usr/bin/python3 /usr/local/bin/dropbox-refresh-media.py
+          echo "[$(date --iso-8601=seconds)] Dropbox-Medienaktualisierung abgeschlossen"
+
           {% if dropbox_restart_gallery_after_sync | bool %}
-            if [ -x "{{ dropbox_player_script }}" ]; then
-              echo "[$(date --iso-8601=seconds)] Starte Gallery neu"
-              
-              # Kill existing mpv process
-              #pkill -u {{ dropbox_user }} -f '/usr/bin/mpv .*--playlist=' >/dev/null 2>&1 || true
-              #sleep 1
-              
-              # Start gallery with X11 environment
-              #export DISPLAY=:0
-              #export XAUTHORITY={{ dropbox_home }}/.Xauthority
-              
-              # Run as {{ dropbox_user }} with environment variables
-              #su - {{ dropbox_user }} -c "export DISPLAY=:0; export XAUTHORITY=\$HOME/.Xauthority; nohup {{ dropbox_player_script }} >/dev/null 2>&1 &" \
-              #  || echo "[$(date --iso-8601=seconds)] Fehler beim Starten des Gallery-Scripts" 
-              reboot
-              echo "[$(date --iso-8601=seconds)] Gallery-Neustart-Befehl ausgeführt"
-            else
-              echo "[$(date --iso-8601=seconds)] Gallery-Startscript fehlt: {{ dropbox_player_script }}"
-            fi
+          if [ -x "{{ dropbox_player_script }}" ]; then
+            echo "[$(date --iso-8601=seconds)] Starte Gallery neu"
+            
+            # Kill existing mpv process
+            killall -u {{ dropbox_user }} mpv >/dev/null 2>&1 || true
+            sleep 1
+            
+            # Start gallery as user
+            su - {{ dropbox_user }} -c "DISPLAY=:0 XAUTHORITY=\$HOME/.Xauthority nohup {{ dropbox_player_script }} >/dev/null 2>&1 &" \
+              && echo "[$(date --iso-8601=seconds)] Gallery neu gestartet" \
+              || echo "[$(date --iso-8601=seconds)] Fehler beim Starten der Gallery"
+          else
+            echo "[$(date --iso-8601=seconds)] Gallery-Startscript fehlt: {{ dropbox_player_script }}"
+          fi
           {% endif %}
-            echo "[$(date --iso-8601=seconds)] Dropbox-Medienaktualisierung abgeschlossen"
-          } >> "{{ dropbox_copy_log_file }}" 2>&1
       when: dropbox_copy_enable | bool
 
     - name: Create Dropbox token refresh script
@@ -630,6 +634,27 @@
         state: started
         daemon_reload: true
 
+    - name: Ensure journald drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ dropbox_journald_dropin_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure journald retention limits for Dropbox services
+      ansible.builtin.copy:
+        dest: "{{ dropbox_journald_dropin_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Journal]
+          SystemMaxUse={{ dropbox_journald_system_max_use }}
+          SystemKeepFree={{ dropbox_journald_system_keep_free }}
+          MaxRetentionSec={{ dropbox_journald_max_retention_sec }}
+      notify: Restart systemd-journald
+
     - name: Allow passwordless sudo for frequent Dropbox operations
       ansible.builtin.copy:
         dest: "{{ dropbox_sudoers_file }}"
@@ -668,6 +693,8 @@
           User={{ dropbox_user }}
           Group={{ dropbox_group }}
           ExecStart=/usr/local/bin/dropbox-copy.sh
+          StandardOutput=journal
+          StandardError=journal
       when: dropbox_copy_enable | bool
 
     - name: Create systemd timer for Dropbox copy
@@ -725,6 +752,10 @@
         daemon_reload: true
       when: dropbox_enable_mount | bool
 
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
     - name: Print Dropbox status
       ansible.builtin.debug:
         msg:
@@ -740,9 +771,16 @@
           - "Gallery-Neustart nach Sync: {{ dropbox_restart_gallery_after_sync }}"
           - "Refresh-Token-Datei: {{ dropbox_refresh_token_file }}"
           - "Token-Refresh Service manuell: sudo systemctl start dropbox-token-refresh.service"
+          - "Sync Logs: sudo journalctl -u dropbox-rclone-copy.service -n 100 --no-pager"
           - "Token-Refresh Logs: sudo journalctl -u dropbox-token-refresh.service -n 100 --no-pager"
           - "Neuen Refresh-Token erzeugen und speichern: sudo /usr/local/bin/dropbox-authorize.sh [optionaler-zielpfad]"
           - "Gallery-Setup ausführen: ansible-playbook ansible/gallery.yml -i inventory-remote.ini -K"
-          - "Log-Datei: {{ dropbox_copy_log_file }}"
           - "Filter: {{ (dropbox_filter_patterns | join(', ')) if (dropbox_filter_patterns | length > 0) else 'kein Filter' }}"
           - "Mount-Pfad: {{ dropbox_mount_point }}"
+          - "Journald Retention: {{ dropbox_journald_max_retention_sec }} (max {{ dropbox_journald_system_max_use }}, min frei {{ dropbox_journald_system_keep_free }})"
+
+  handlers:
+    - name: Restart systemd-journald
+      ansible.builtin.systemd:
+        name: systemd-journald
+        state: restarted

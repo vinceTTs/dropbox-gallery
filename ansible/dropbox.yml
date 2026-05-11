@@ -25,6 +25,7 @@
     dropbox_copy_enable: true
     dropbox_copy_schedule: "*-*-* 03:00:00"
     dropbox_restart_gallery_after_sync: true
+    dropbox_reboot_after_sync: true
     dropbox_token_refresh_schedule: "*:0/45"
     dropbox_filter_file: "{{ dropbox_config_dir }}/dropbox-download.filter"
     dropbox_sudoers_file: /etc/sudoers.d/90-dropbox-gallery
@@ -459,7 +460,12 @@
           /usr/bin/python3 /usr/local/bin/dropbox-refresh-media.py
           echo "[$(date --iso-8601=seconds)] Dropbox-Medienaktualisierung abgeschlossen"
 
-          {% if dropbox_restart_gallery_after_sync | bool %}
+          {% if dropbox_reboot_after_sync | bool %}
+          echo "[$(date --iso-8601=seconds)] Plane Neustart in 1 Minute"
+          /usr/bin/sudo /sbin/shutdown -r +1 "Reboot triggered by Dropbox sync" \
+            && echo "[$(date --iso-8601=seconds)] Neustart geplant" \
+            || echo "[$(date --iso-8601=seconds)] Fehler: Neustart konnte nicht geplant werden"
+          {% elif dropbox_restart_gallery_after_sync | bool %}
           if [ -x "{{ dropbox_player_script }}" ]; then
             echo "[$(date --iso-8601=seconds)] Starte Gallery neu"
             killall -u {{ dropbox_user }} mpv >/dev/null 2>&1 || true
@@ -658,7 +664,7 @@
         mode: '0440'
         validate: /usr/sbin/visudo -cf %s
         content: |
-          Cmnd_Alias DROPBOX_GALLERY_CMDS = /usr/local/bin/dropbox-authorize.sh, /usr/local/bin/dropbox-reconnect.sh, /usr/bin/systemctl start dropbox-rclone-copy.service, /usr/bin/systemctl restart dropbox-rclone-copy.timer, /usr/bin/systemctl status dropbox-rclone-copy.service, /usr/bin/systemctl start dropbox-token-refresh.service, /usr/bin/systemctl status dropbox-token-refresh.service
+          Cmnd_Alias DROPBOX_GALLERY_CMDS = /usr/local/bin/dropbox-authorize.sh, /usr/local/bin/dropbox-reconnect.sh, /usr/bin/systemctl start dropbox-rclone-copy.service, /usr/bin/systemctl restart dropbox-rclone-copy.timer, /usr/bin/systemctl status dropbox-rclone-copy.service, /usr/bin/systemctl start dropbox-token-refresh.service, /usr/bin/systemctl status dropbox-token-refresh.service, /sbin/shutdown
           {{ dropbox_user }} ALL=(root) NOPASSWD: DROPBOX_GALLERY_CMDS
 
     - name: Test Dropbox connection
@@ -765,6 +771,7 @@
           - "Bilder lokal verkleinern: {{ dropbox_resize_images }} (max {{ dropbox_resize_max_dimension }} px)"
           - "Zeitplan: {{ dropbox_copy_schedule }}"
           - "Manueller Einmal-Start: sudo systemctl start dropbox-rclone-copy.service"
+          - "Neustart nach Sync: {{ dropbox_reboot_after_sync }}"
           - "Gallery-Neustart nach Sync: {{ dropbox_restart_gallery_after_sync }}"
           - "Refresh-Token-Datei: {{ dropbox_refresh_token_file }}"
           - "Token-Refresh Service manuell: sudo systemctl start dropbox-token-refresh.service"
